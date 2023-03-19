@@ -3,13 +3,6 @@ docker_compose("./docker-compose.yaml")
 dc_resource("nomad")
 dc_resource("consul")
 
-# Illustrates how you can run the Nomad command without installing it
-local_resource(
-    "Nomad version", 
-    cmd="docker run --network host multani/nomad run --help",
-    resource_deps=["nomad"]    
-)
-
 def nomad_job(
     name,
     jobspec,
