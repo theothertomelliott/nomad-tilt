@@ -1,0 +1,25 @@
+version: '2.1'
+
+services:
+  nomad:
+    image: multani/nomad
+    command: agent -dev -bind 0.0.0.0
+    privileged: true
+    network_mode: host
+    environment:
+      NOMAD_LOCAL_CONFIG: |
+        data_dir = "/nomad/data/"
+    ports:
+      - 4646:4646
+      - 4647:4647
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - /tmp:/tmp
+  consul:
+    image: consul
+    command: agent -dev
+    privileged: true
+    network_mode: host
+    ports:
+      - 8500:8500
