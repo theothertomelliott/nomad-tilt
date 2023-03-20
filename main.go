@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/hashicorp/nomad/api"
 )
@@ -34,10 +34,23 @@ func main() {
 	jobID := *job.ID
 	fmt.Println("Monitoring Job:", jobID)
 
+	events, err := c.EventStream().Stream(
+		context.Background(),
+		map[api.Topic][]string{
+			api.TopicAllocation: {jobID},
+		},
+		0,
+		nil,
+	)
+	if err != nil {
+		panic(err)
+	}
+
 	allocs, _, err := c.Jobs().Allocations(jobID, true, nil)
 	if err != nil {
 		panic(err)
 	}
+
 	for _, alloc := range allocs {
 		allocation, _, err := c.Allocations().Info(alloc.ID, nil)
 		if err != nil {
@@ -54,22 +67,17 @@ func main() {
 		}
 	}
 
-	expectRunning := true
-	for {
-		liveJob, _, err := c.Jobs().Info(jobID, nil)
-		if err != nil {
-			panic(err)
+	for ev := range events {
+		for _, event := range ev.Events {
+			if event.Type != "AllocationUpdated" {
+				continue
+			}
+			alloc, err := event.Allocation()
+			if err != nil {
+				panic(err)
+			}
+			log.Printf("%v is %v", alloc.ID, alloc.ClientStatus)
 		}
-
-		status := *liveJob.Status
-		if status == "dead" && expectRunning {
-			log.Printf("Job is dead")
-			expectRunning = false
-		} else if !expectRunning {
-			log.Printf("Job is %v", status)
-			expectRunning = true
-		}
-		time.Sleep(5 * time.Second)
 	}
 }
 
