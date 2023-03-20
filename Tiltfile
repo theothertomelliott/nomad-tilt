@@ -18,12 +18,17 @@ def nomad_job(
         # -var image_version=v0.2.0
 
         specfile = os.path.basename(jobspec)
-        resource_deps.append("nomad")
+        
+        final_resource_deps = ["nomad"]
+        final_resource_deps.extend(resource_deps)
+
+        final_links = [link("http://localhost:4646/ui/jobs/" + name, "Nomad UI for Job")]
+        final_links.extend(links)
         local_resource(
             name, 
             serve_cmd="docker run -v $(pwd)/" + jobspec + ":/app/" + specfile + " --network host multani/nomad run -verbose /app/" + specfile + " && go run main.go " + jobspec,
-            resource_deps=resource_deps,
-            links = links
+            resource_deps = final_resource_deps,
+            links = final_links
         )
 
 nomad_job("helloapp", "examples/hello.nomad")
