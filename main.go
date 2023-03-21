@@ -6,90 +6,127 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/nomad/api"
 )
 
 func main() {
-	c, err := api.NewClient(&api.Config{
-		Address: "http://localhost:4646",
-	})
+	m, err := New("http://localhost:4646")
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("Connected")
-	defer c.Close()
 
-	cancel := make(chan struct{})
-	defer close(cancel)
+	fmt.Println("Monitoring Job:", m.jobID)
+
+	err = m.Start()
+	if err != nil {
+		panic(err)
+	}
+
+	for ev := range m.events {
+		err := m.processEvent(ev)
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
+type Monitor struct {
+	startTime time.Time
+	client    *api.Client
+	jobID     string
+
+	cancel chan struct{}
+
+	knownAllocations map[string]struct{}
+
+	events <-chan *api.Events
+}
+
+func New(addr string) (*Monitor, error) {
+	var err error
+	m := &Monitor{
+		startTime:        time.Now(),
+		knownAllocations: make(map[string]struct{}),
+	}
+
+	m.client, err = api.NewClient(&api.Config{
+		Address: addr,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	jobSpec, err := os.ReadFile(os.Args[1])
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	job, err := c.Jobs().ParseHCL(string(jobSpec), false)
+	job, err := m.client.Jobs().ParseHCL(string(jobSpec), false)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	jobID := *job.ID
-	fmt.Println("Monitoring Job:", jobID)
+	m.jobID = *job.ID
 
-	events, err := c.EventStream().Stream(
+	m.cancel = make(chan struct{})
+	return m, nil
+}
+
+func (m *Monitor) Start() error {
+	var err error
+	m.events, err = m.client.EventStream().Stream(
 		context.Background(),
 		map[api.Topic][]string{
-			api.TopicAllocation: {jobID},
+			api.TopicAllocation: {"*"},
 		},
 		0,
 		nil,
 	)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	allocs, _, err := c.Jobs().Allocations(jobID, true, nil)
+	allocs, _, err := m.client.Jobs().Allocations(m.jobID, true, nil)
+	if err != nil {
+		return err
+	}
+
+	for _, alloc := range allocs {
+		m.watchAllocation(alloc.ID, true)
+	}
+
+	return nil
+}
+
+func (m *Monitor) watchAllocation(allocID string, checkTaskState bool) {
+	allocation, _, err := m.client.Allocations().Info(allocID, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	for _, alloc := range allocs {
-		allocation, _, err := c.Allocations().Info(alloc.ID, nil)
-		if err != nil {
-			panic(err)
+	for task, taskState := range allocation.TaskStates {
+		// Don't output logs for non-running tasks
+		if checkTaskState && taskState.State != "running" {
+			continue
 		}
 
-		for task, taskState := range alloc.TaskStates {
-			// Don't output logs for non-running tasks
-			if taskState.State != "running" {
-				continue
-			}
-			outputLogsForTask(c, allocation, task, "stdout", cancel)
-			outputLogsForTask(c, allocation, task, "stderr", cancel)
-		}
-	}
+		// Record this allocation as one we're watching
+		m.knownAllocations[allocation.ID] = struct{}{}
 
-	for ev := range events {
-		for _, event := range ev.Events {
-			if event.Type != "AllocationUpdated" {
-				continue
-			}
-			alloc, err := event.Allocation()
-			if err != nil {
-				panic(err)
-			}
-			log.Printf("%v is %v", alloc.ID, alloc.ClientStatus)
-		}
+		m.outputLogsForTask(allocation, task, "stdout")
+		m.outputLogsForTask(allocation, task, "stderr")
 	}
 }
 
-func outputLogsForTask(c *api.Client, allocation *api.Allocation, task string, logType string, cancel <-chan struct{}) {
-	logStream, errorStream := c.AllocFS().Logs(
+func (m *Monitor) outputLogsForTask(allocation *api.Allocation, task string, logType string) {
+	logStream, errorStream := m.client.AllocFS().Logs(
 		allocation,
 		true,
 		task,
 		logType,
 		"start",
 		0,
-		cancel,
+		m.cancel,
 		nil,
 	)
 	go func() {
@@ -111,4 +148,43 @@ func outputLogsForTask(c *api.Client, allocation *api.Allocation, task string, l
 			}
 		}
 	}()
+}
+
+func (m *Monitor) processEvent(ev *api.Events) error {
+	for _, event := range ev.Events {
+		if event.Type != "AllocationUpdated" {
+			continue
+		}
+
+		// Match either the job name or subjobs for the batch scheduler
+		match := false
+		for _, k := range event.FilterKeys {
+			if k == m.jobID || strings.HasPrefix(k, fmt.Sprintf("%v/", m.jobID)) {
+				match = true
+			}
+		}
+		if !match {
+			continue
+		}
+
+		alloc, err := event.Allocation()
+		if err != nil {
+			return err
+		}
+		if alloc == nil {
+			continue
+		}
+
+		_, allocIsKnown := m.knownAllocations[alloc.ID]
+		createTime := time.Unix(0, alloc.CreateTime)
+		diff := createTime.Sub(m.startTime)
+		if !allocIsKnown && diff < 0 {
+			continue
+		}
+		log.Printf("Allocation %v is %v", alloc.ID, alloc.ClientStatus)
+		if !allocIsKnown {
+			m.watchAllocation(alloc.ID, false)
+		}
+	}
+	return nil
 }
