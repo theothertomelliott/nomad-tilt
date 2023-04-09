@@ -26,10 +26,10 @@ def nomad_job(
         final_links.extend(links)
         local_resource(
             name, 
-            serve_cmd="docker run -v $(pwd)/" + jobspec + ":/app/" + specfile + " --network host multani/nomad run -verbose /app/" + specfile + " && go run main.go " + jobspec,
+            serve_cmd="docker run -v $(pwd)/" + jobspec + ":/app/" + specfile + " --network host multani/nomad run -verbose /app/" + specfile + " && go run . " + jobspec,
             resource_deps = final_resource_deps,
             links = final_links
         )
 
-nomad_job("helloapp", "examples/hello.nomad")
-nomad_job("batch", "examples/batch.nomad")
+nomad_job("helloapp", "examples/hello/hello.nomad")
+nomad_job("batch", "examples/batch/batch.nomad")

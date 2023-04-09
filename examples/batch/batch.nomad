@@ -9,8 +9,8 @@ job "batch" {
   }
 
   periodic {
-    // Launch every 20 seconds
-    cron = "*/20 * * * * * *"
+    // Launch every 5 seconds
+    cron = "*/5 * * * * * *"
 
     // Do not allow overlapping runs.
     prohibit_overlap = true
