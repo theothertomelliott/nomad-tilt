@@ -127,7 +127,9 @@ func (m *Monitor) outputLogsForTask(allocation *api.Allocation, task string, log
 					}
 				}
 			case err := <-errorStream:
-				panic(err)
+				// TODO: Try to recover from this error
+				log.Printf("Could not read logs for %v/%v (%v): %v", allocationId, task, logType, err)
+				return
 			case <-m.allocationLogChannels[allocationId]:
 				return
 			}
@@ -177,6 +179,7 @@ func (m *Monitor) processEvent(ev *api.Events) error {
 						fmt.Println("Recovered in f", r)
 					}
 				}()
+				log.Printf("closing channel for %v", alloc.ID)
 				close(m.allocationLogChannels[alloc.ID])
 			}()
 		}
